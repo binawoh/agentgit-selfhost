@@ -73,7 +73,7 @@ def main():
             executable.write_bytes(binary)
             executable.chmod(0o755)
         launcher = stage / "bin/agit-selfhost"
-        shutil.copyfile(root / "selfhost/npm/agit-selfhost.sh", launcher)
+        launcher.write_bytes((root / "selfhost/npm/agit-selfhost.sh").read_bytes().replace(b"\r\n", b"\n"))
         launcher.chmod(0o755)
         shutil.copyfile(root / "LICENSE", stage / "LICENSE")
         shutil.copyfile(root / "selfhost/npm/README.md", stage / "README.md")
