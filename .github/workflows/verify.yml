@@ -1,0 +1,65 @@
+name: Verify private Hub
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protocol:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read the pinned client revision
+        id: client
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          with open("Cargo.toml", "rb") as source:
+              revision = tomllib.load(source)["dependencies"]["agit"]["rev"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"revision={revision}\n")
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: binawoh/agent-git
+          ref: ${{ steps.client.outputs.revision }}
+          path: .cache/client
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y git-lfs
+      - run: cargo fmt --all --check
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+      - run: cargo build --locked --manifest-path .cache/client/Cargo.toml --bin agit
+      - name: Pack and install the Hub through npm
+        run: |
+          python3 selfhost/npm/pack.py --binary target/release/agit-selfhost --name agit-selfhost-local --source-commit "$GITHUB_SHA" --output selfhost/artifacts/npm
+          npm install --global --prefix "$RUNNER_TEMP/agit-selfhost-npm" --ignore-scripts --no-audit --no-fund --offline ./selfhost/artifacts/npm/*.tgz
+          "$RUNNER_TEMP/agit-selfhost-npm/bin/agit-selfhost" --help
+      - run: python3 selfhost/e2e.py --agit target/debug/agit --server "$RUNNER_TEMP/agit-selfhost-npm/bin/agit-selfhost" --output selfhost/artifacts/e2e-linux.json
+      - run: sha256sum target/release/agit-selfhost > selfhost/artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agit-selfhost-linux-x86_64
+          path: |
+            target/release/agit-selfhost
+            selfhost/artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agit-selfhost-npm-local
+          path: selfhost/artifacts/npm/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selfhost-protocol-evidence
+          path: selfhost/artifacts/e2e-linux.json
