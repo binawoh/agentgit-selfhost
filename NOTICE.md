@@ -6,9 +6,10 @@ The backend source was extracted from `crates/agit-selfhost` in
 Deployment examples, collection tools, the protocol test, and npm packaging
 also originate in that fork's `selfhost` directory.
 
-The shared AgentGit library and the compatible test client are pinned to
+The initial shared AgentGit library and compatible test client were pinned to
 `66c3a042c6b6643de7627b19b8a65984054beb1c` in that fork. This is the source
 revision used for the original `@jooooesg/agit-selfhost@0.1.0` release.
+The current shared library and companion client revision is pinned in `Cargo.toml`.
 
 The upstream project is `https://github.com/Einsia/agent-git`, licensed under
 the MIT License, Copyright (c) 2026 Einsia. Its license notice is retained in
