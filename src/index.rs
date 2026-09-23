@@ -61,6 +61,7 @@ pub fn reindex(state: &mut State, repo: &Repository) -> Result<()> {
             if exists {
                 return Ok(());
             }
+            crate::space::check_write(state, 0)?;
             let metadata = git::snapshot_meta(&path, oid)?;
             if metadata.is_file_line() || metadata.session.is_empty() {
                 return Ok(());
@@ -110,6 +111,9 @@ pub fn reindex(state: &mut State, repo: &Repository) -> Result<()> {
         )?;
             let mut complete = true;
             for (ordinal, event) in session.events.iter().enumerate() {
+                if ordinal % 64 == 0 {
+                    crate::space::check_write_at(&state.root, &state.config.storage, 0)?;
+                }
                 let Some(scope) = scope(event.kind) else {
                     continue;
                 };
@@ -167,6 +171,7 @@ pub fn reindex(state: &mut State, repo: &Repository) -> Result<()> {
                 "UPDATE snapshots SET index_complete=?1 WHERE repo_id=?2 AND oid=?3",
                 params![complete, repo.id, oid],
             )?;
+            crate::space::check_write_at(&state.root, &state.config.storage, 0)?;
             tx.commit()?;
             Ok(())
         })();

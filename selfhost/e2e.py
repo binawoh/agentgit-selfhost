@@ -100,7 +100,7 @@ def main():
         raise AssertionError("Server readiness timeout")
 
     try:
-        pat = run([server, "--data", root / "data", "init", "--owner", "tester", "--public-url", hub]).stdout.strip()
+        pat = run([server, "--data", root / "data", "init", "--owner", "tester", "--public-url", hub, "--min-free-mib", "0"]).stdout.strip()
         process = start()
         api("/api/agents", status=401, authenticated=False)
         login = api("/api/auth/login", "POST", {"token": pat}, authenticated=False)
@@ -160,9 +160,12 @@ def main():
         messages = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                     {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read_remote",
                      "arguments": {"repo": "tester/demo", "session_id": hit["session_id"], "reference": hit["commit"], "from": 1}}}]
+        api("/api/storage/policy", "PATCH", {"quota_mib": 1, "warn_percent": 1})
         mcp = run([agit, "mcp"], "".join(json.dumps(v) + "\n" for v in messages), environment=cold)
         reply = [json.loads(line) for line in mcp.stdout.splitlines() if line.strip()][-1]
         assert not reply["result"].get("isError") and "缓存" in json.dumps(reply, ensure_ascii=False), reply
+        assert "storage_warning" in json.dumps(reply), reply
+        api("/api/storage/policy", "PATCH", {"quota_mib": 5120, "warn_percent": 80})
         passed("CJK search, real author filtering and MCP remote read before clone")
         payload = b"synthetic binary fixture\x00" * 1000
         oid = hashlib.sha256(payload).hexdigest()

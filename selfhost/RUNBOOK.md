@@ -36,10 +36,14 @@ Git transport, Chinese search, filters, MCP reads before cloning, incremental
 versions, Git LFS restoration, rejected transactions, restart persistence and
 token revocation. It retains temporary data for diagnosis and prints that path.
 No real native sessions are read. Raw local test reports are ignored by Git.
-The `Verify private Hub` workflow builds the pinned companion client and runs
-the protocol test against a release server
-on Ubuntu 24.04. Successful runs attach `agit-selfhost-linux-x86_64` with its
-SHA-256 checksum. This artifact is for x86-64 Linux, not an ARM VPS.
+The `Verify private Hub` workflow builds static musl binaries on native x64 and
+ARM64 Ubuntu runners, then runs the protocol and storage tests against the
+installed npm package. It also runs storage tests on Debian and Alpine on each
+architecture. Artifacts include `server-x64`, `server-arm64`, the combined
+`agit-selfhost-npm` tarball with its checksum, and `protocol-evidence-*` reports.
+
+Run storage tests independently with
+`python3 selfhost/storage_e2e.py --server target/debug/agit-selfhost`.
 
 ## Ubuntu deployment
 
@@ -95,6 +99,75 @@ must agree. Requests are processed serially; this is a personal archive service.
 
 Keep the executable at `/usr/local/bin/agit-selfhost`: repository receive hooks
 record its absolute path. Stop the service before replacing the executable.
+
+## Storage policy and cleanup
+
+All settings are optional at `init` and can be changed later:
+
+| CLI option / JSON field | Default | Meaning |
+| --- | --- | --- |
+| `--quota-mib` / `quota_mib` | 5120 | Total data admission budget in MiB; positive integer |
+| `--warn-percent` / `warn_percent` | 80 | Warn at this percentage of quota; 1 to 100 |
+| `--min-free-mib` / `min_free_mib` | 3072 | Pause uploads below this filesystem reserve; 0 disables the reserve |
+| `--temp-max-age-hours` / `temp_max_age_hours` | 168 | Expire abandoned temporary files after this many hours; 1 to 876000 |
+| `--cleanup-interval-hours` / `cleanup_interval_hours` | 24 | Cleanup interval while running; 1 to 8760 |
+
+1 GiB is 1024 MiB. For example, set 10 GiB with a 90% warning and keep other
+settings unchanged:
+
+```sh
+sudo systemctl stop agit-selfhost
+sudo -u agit-hub /usr/local/bin/agit-selfhost --data /var/lib/agit-selfhost \
+  storage-configure --quota-mib 10240 --warn-percent 90
+sudo systemctl start agit-selfhost
+sudo -u agit-hub /usr/local/bin/agit-selfhost --data /var/lib/agit-selfhost storage-status
+```
+
+Changes persist in `config.json`. Old configurations without a storage policy
+use the defaults. Lowering the quota below current usage pauses uploads without
+deleting data; increasing it allows uploads again if disk space is sufficient.
+
+Authenticated management endpoints also accept the existing access token:
+
+- `GET /api/storage`: policy, usage by category, free bytes, percentage,
+  `state`, `warning`, and `uploads_paused`.
+- `PATCH /api/storage/policy`: a partial JSON object such as
+  `{"quota_mib":10240,"warn_percent":90}`; applies immediately without a restart.
+- `POST /api/storage/cleanup`: `{}` previews; `{"apply":true}` deletes the listed
+  expired temporary files.
+
+Warnings appear in `storage-status`, the API, `read_remote` transcript results
+(a `storage_warning` field visible to the calling agent), authenticated response headers
+`X-AgentGit-Storage-State` and `X-AgentGit-Storage-Warning`, Git receive messages,
+and server logs when the state changes. This release does not send email or
+desktop notifications. Clients must display the warning or query the status;
+existing MCP search tools do not automatically display response headers.
+New uploads that exceed the admission budget receive HTTP 507, or a Git
+pre-receive rejection. Searches, transcript reads, clones, and attachment
+downloads remain available while uploads are paused.
+
+Usage counts logical file bytes under the data directory, including Git, LFS,
+SQLite/WAL, and temporary files. External backups and unrelated VPS files are
+outside the quota but reduce filesystem free space. This is an upload admission
+budget, not an operating-system hard quota: Git unpacking, SQLite commits,
+authentication, and read-response spooling can use additional transient space.
+Keep the disk reserve and per-request limits appropriate for the VPS. Indexing
+may pause after Git has accepted a push; searches report `incomplete` until space
+is available and `reindex` succeeds. No saved content is evicted to make room.
+
+Cleanup runs once on server startup and then at the configured interval, between
+requests. It removes only expired regular files directly in the server-owned
+`tmp/` directory and legacy `.tmp*` files inside known LFS repository directories.
+It skips symlinks and directories. Saved Git history, completed attachments,
+including unreferenced uploads, and native Codex/Claude transcripts are preserved.
+Do not store unrelated files in `tmp/`. Inspect or apply manually while stopped:
+
+```sh
+sudo systemctl stop agit-selfhost
+sudo -u agit-hub /usr/local/bin/agit-selfhost --data /var/lib/agit-selfhost storage-cleanup
+sudo -u agit-hub /usr/local/bin/agit-selfhost --data /var/lib/agit-selfhost storage-cleanup --apply
+sudo systemctl start agit-selfhost
+```
 
 ## Windows client and collection
 
@@ -188,8 +261,8 @@ exit code while any repository remains incomplete. Search caps candidate scannin
 and reports truncation as incomplete. Unsupported
 filters are rejected or exposed through the query's `unknown` field. The index
 deduplicates event bodies, but retains snapshot memberships, so disk usage is
-not identical to compressed Git history. No automatic eviction or disk quota is
-implemented; monitor disk use and keep a separate backup.
+not identical to compressed Git history. Configure the storage policy above and
+keep a separate backup; saved history is never automatically evicted.
 
 For a consistent server backup, stop the service, copy the entire private data
 directory (including config, SQLite/WAL, repositories and LFS), then restart.

@@ -20,11 +20,30 @@ conversation repositories remain private and authenticated.
   through an explicit local client operation.
 - CLI administration, systemd deployment, an HTTPS reverse proxy, and native
   Linux binary distribution through npm.
+- Configurable storage quota, warning threshold, free-disk reserve, and periodic
+  cleanup of expired temporary uploads.
 
 There is no web dashboard, remote agent execution, automatic native-session
-upload, storage quota, retention scheduler, or automatic backup. The per-request
-upload limit is not a total storage quota. Monitor disk use and keep a separate
-backup; saved conversations are not automatically evicted.
+upload, or automatic backup. Saved conversations and completed attachments never
+expire automatically. Keep a separate backup.
+
+## Choose your storage policy
+
+For example, choose a 10 GiB quota and a warning at 90% during initialization:
+
+```sh
+agit-selfhost --data /var/lib/agit-selfhost init --owner YOUR_OWNER \
+  --public-url https://history.example.com --quota-mib 10240 --warn-percent 90
+```
+
+The defaults are 5 GiB, an 80% warning, a 3 GiB free-disk reserve, and daily
+cleanup of temporary files older than seven days. All five settings are
+configurable. Existing installations can change individual settings with
+`storage-configure` while stopped, or the authenticated HTTP API while running.
+`storage-status` reports usage and warnings. At the quota or disk reserve, new
+uploads pause while saved data remains readable. See the
+[storage policy reference](selfhost/RUNBOOK.md#storage-policy-and-cleanup) for
+commands, warning delivery, and the upload budget's limits.
 
 ## Build
 
@@ -60,17 +79,19 @@ service is outside this backend's scope.
 
 ## Verification
 
-The GitHub Actions workflow builds the pinned companion client and this server
-on Ubuntu 24.04, runs server tests, installs a locally packed npm artifact, and
-runs the existing protocol test against the installed binary. All conversations
-used by the test are synthetic. Build artifacts include the Linux x86-64 binary,
-its SHA-256 checksum, and an installable npm tarball.
+The GitHub Actions workflow builds static musl servers and the pinned companion
+client on native Ubuntu x64 and ARM64 runners. It installs the combined npm
+artifact and runs protocol and storage tests on Ubuntu, plus storage tests in
+Debian and Alpine containers on both architectures. All conversations used by
+the tests are synthetic. Artifacts include both binaries, the npm tarball with
+its checksum and source metadata, and test reports.
 
 To run the protocol test with a compatible client you already built:
 
 ```sh
 python3 selfhost/e2e.py --agit /path/to/agit --server target/release/agit-selfhost \
   --output selfhost/artifacts/e2e-linux.json
+python3 selfhost/storage_e2e.py --server target/release/agit-selfhost
 ```
 
 Use Python 3.11 or newer. On Windows, use `python -X utf8`, `.exe` binary paths,
@@ -79,7 +100,8 @@ and `--state-parent "$env:USERPROFILE"` for the test's private state directory.
 ## npm distribution
 
 [`@jooooesg/agit-selfhost`](https://www.npmjs.com/package/@jooooesg/agit-selfhost)
-distributes the native Ubuntu 24.04 x86-64 server. npm hosts the installation
+distributes native static Linux x64 and ARM64 servers, with automatic architecture
+selection. npm hosts the installation
 package, not your running service or your conversations. See the
 [package documentation](selfhost/npm/README.md).
 

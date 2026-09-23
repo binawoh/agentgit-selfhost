@@ -8,14 +8,39 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import tarfile
 import tempfile
 import tomllib
 
 
+def validate_binary(binary, architecture):
+    machine = {"x64": 62, "arm64": 183}[architecture]
+    if len(binary) < 64 or binary[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", binary, 18)[0] != machine:
+        raise ValueError(f"Expected a little-endian Linux {architecture} ELF binary")
+    offset = struct.unpack_from("<Q", binary, 32)[0]
+    entry_size, count = struct.unpack_from("<HH", binary, 54)
+    if entry_size < 56 or count == 0 or offset + entry_size * count > len(binary):
+        raise ValueError("Invalid ELF program headers")
+    for index in range(count):
+        kind, _, start, _, _, size, _, _ = struct.unpack_from("<IIQQQQQQ", binary, offset + index * entry_size)
+        if kind == 3:
+            raise ValueError("Linux packages require static binaries without a dynamic interpreter")
+        if kind == 2:
+            if start + size > len(binary) or size % 16:
+                raise ValueError("Invalid ELF dynamic section")
+            for position in range(start, start + size, 16):
+                tag, _ = struct.unpack_from("<qQ", binary, position)
+                if tag == 1:
+                    raise ValueError("Linux packages must not require dynamic libraries")
+                if tag == 0:
+                    break
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--binary-x64", type=Path, required=True)
+    parser.add_argument("--binary-arm64", type=Path, required=True)
     parser.add_argument("--name", required=True, help="npm package name owned by the publisher")
     parser.add_argument("--source-commit", required=True, help="Git commit used to build the binary")
     parser.add_argument("--output", type=Path, required=True)
@@ -27,9 +52,12 @@ def main():
     if not re.fullmatch(r"[0-9a-f]{40}", args.source_commit):
         parser.error("Expected the full source commit SHA")
     root = Path(__file__).resolve().parents[2]
-    binary = args.binary.read_bytes()
-    if len(binary) < 20 or binary[:6] != b"\x7fELF\x02\x01" or binary[18:20] != b"\x3e\x00":
-        parser.error("Expected a little-endian x86-64 Linux ELF binary")
+    binaries = {"x64": args.binary_x64.read_bytes(), "arm64": args.binary_arm64.read_bytes()}
+    for architecture, binary in binaries.items():
+        try:
+            validate_binary(binary, architecture)
+        except ValueError as error:
+            parser.error(str(error))
     version = tomllib.loads((root / "Cargo.toml").read_text("utf-8"))["package"]["version"]
     args.output.mkdir(parents=True, exist_ok=True)
     output = args.output.resolve()
@@ -39,29 +67,35 @@ def main():
     with tempfile.TemporaryDirectory(prefix="agit-selfhost-npm-") as temporary:
         stage = Path(temporary)
         (stage / "bin").mkdir()
-        executable = stage / "bin/agit-selfhost"
-        executable.write_bytes(binary)
-        executable.chmod(0o755)
+        for architecture, binary in binaries.items():
+            executable = stage / f"bin/linux-{architecture}/agit-selfhost"
+            executable.parent.mkdir()
+            executable.write_bytes(binary)
+            executable.chmod(0o755)
+        launcher = stage / "bin/agit-selfhost"
+        shutil.copyfile(root / "selfhost/npm/agit-selfhost.sh", launcher)
+        launcher.chmod(0o755)
         shutil.copyfile(root / "LICENSE", stage / "LICENSE")
         shutil.copyfile(root / "selfhost/npm/README.md", stage / "README.md")
         shutil.copyfile(root / "selfhost/RUNBOOK.md", stage / "RUNBOOK.md")
         shutil.copytree(root / "selfhost/deploy", stage / "deploy")
         manifest = {
             "name": args.name, "version": version,
-            "description": "Single-owner private AgentGit Hub for Ubuntu 24.04 x86-64",
+            "description": "Private AgentGit Hub for Linux x64 and ARM64, with configurable storage quotas",
             "license": "MIT",
             "repository": {"type": "git", "url": "git+https://github.com/binawoh/agentgit-selfhost.git", "directory": "selfhost/npm"},
             "homepage": "https://github.com/binawoh/agentgit-selfhost/blob/main/selfhost/RUNBOOK.md",
-            "os": ["linux"], "cpu": ["x64"], "libc": ["glibc"],
+            "os": ["linux"], "cpu": ["x64", "arm64"],
             "bin": {"agit-selfhost": "bin/agit-selfhost"},
-            "files": ["bin/agit-selfhost", "build.json", "README.md", "RUNBOOK.md", "LICENSE", "deploy/"],
+            "files": ["bin/", "build.json", "README.md", "RUNBOOK.md", "LICENSE", "deploy/"],
             "publishConfig": {"access": "public", "registry": "https://registry.npmjs.org/"},
         }
         (stage / "package.json").write_text(json.dumps(manifest, indent=2) + "\n", "utf-8")
         (stage / "build.json").write_text(json.dumps({
             "source_commit": args.source_commit,
-            "binary_sha256": hashlib.sha256(binary).hexdigest(),
-            "target": "x86_64-unknown-linux-gnu", "tested_os": "Ubuntu 24.04",
+            "binaries": {architecture: {"sha256": hashlib.sha256(binary).hexdigest(),
+                "target": {"x64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[architecture]}
+                for architecture, binary in binaries.items()},
         }, indent=2) + "\n", "utf-8")
         result = subprocess.run([npm, "pack", "--ignore-scripts", "--json", "--pack-destination", str(output)],
                                 cwd=stage, capture_output=True, check=True)
@@ -72,7 +106,7 @@ def main():
             normalized = Path(mode_directory) / tarball.name
             with tarfile.open(tarball, "r:gz") as source, tarfile.open(normalized, "w:gz") as target:
                 for member in source.getmembers():
-                    if member.name == "package/bin/agit-selfhost":
+                    if member.name.startswith("package/bin/") and member.isfile():
                         member.mode = 0o755
                     target.addfile(member, source.extractfile(member) if member.isfile() else None)
             normalized.replace(tarball)

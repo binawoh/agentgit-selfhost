@@ -271,6 +271,10 @@ pub fn validate_push_commands(input: &mut impl Read) -> Result<()> {
 }
 
 pub fn validate_receive(state: &State, repo: &Path) -> Result<()> {
+    crate::space::check_write(state, 0)?;
+    if let Some(warning) = crate::space::status(state)?.warning {
+        eprintln!("{warning}");
+    }
     let real = dunce::canonicalize(repo)?;
     ensure!(
         real.parent() == Some(state.root.join("repos").as_path()),

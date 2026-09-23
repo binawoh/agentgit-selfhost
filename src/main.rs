@@ -1,6 +1,7 @@
 mod git;
 mod http;
 mod index;
+mod space;
 mod state;
 
 use anyhow::{Context, Result};
@@ -29,6 +30,8 @@ enum Command {
         max_snapshot_mib: usize,
         #[arg(long, default_value_t = 256)]
         max_upload_mib: u64,
+        #[command(flatten)]
+        storage: space::PolicyUpdate,
     },
     /// Run behind an HTTPS reverse proxy; loopback is the default.
     Serve {
@@ -46,6 +49,18 @@ enum Command {
     RevokeToken { id: String },
     /// Rebuild derived search data from saved Git history.
     Reindex,
+    /// Show storage policy, usage, disk reserve and upload admission status as JSON.
+    StorageStatus,
+    /// Change selected storage settings; stop the Hub or use the authenticated HTTP API.
+    StorageConfigure {
+        #[command(flatten)]
+        settings: space::PolicyUpdate,
+    },
+    /// Preview abandoned temporary files; --apply removes only those expired files.
+    StorageCleanup {
+        #[arg(long)]
+        apply: bool,
+    },
     /// Validate Git's pre-receive input. Installed hooks call this automatically.
     #[command(hide = true)]
     ValidateReceive,
@@ -59,6 +74,7 @@ fn run() -> Result<()> {
             public_url,
             max_snapshot_mib,
             max_upload_mib,
+            storage,
         } => {
             let state = state::State::initialize(
                 &args.data,
@@ -66,6 +82,7 @@ fn run() -> Result<()> {
                 public_url,
                 max_snapshot_mib,
                 max_upload_mib,
+                storage.apply(&space::Policy::default())?,
             )?;
             println!("{}", state.issue_token("initial")?);
         }
@@ -76,6 +93,21 @@ fn run() -> Result<()> {
                 Command::IssueToken { label } => println!("{}", state.issue_token(&label)?),
                 Command::ListTokens => println!("{}", state.list_tokens()?),
                 Command::RevokeToken { id } => state.revoke_token(&id)?,
+                Command::StorageStatus => {
+                    println!("{}", serde_json::to_string_pretty(&space::status(&state)?)?)
+                }
+                Command::StorageConfigure { settings } => {
+                    let _lock = state.exclusive_lock()?;
+                    state.configure_storage(&settings)?;
+                    println!("{}", serde_json::to_string_pretty(&space::status(&state)?)?);
+                }
+                Command::StorageCleanup { apply } => {
+                    let _lock = state.exclusive_lock()?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&space::cleanup(&state, apply)?)?
+                    );
+                }
                 Command::Reindex => {
                     let _lock = state.exclusive_lock()?;
                     state.db.execute_batch(

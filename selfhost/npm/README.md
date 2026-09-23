@@ -5,9 +5,12 @@ This package distributes a prebuilt private Hub from
 The service and its data run on your own VPS. The npm registry hosts the
 installation package; it does not host the service or save your conversations.
 
-The binary targets **Ubuntu 24.04 on x86-64** with glibc. ARM, Alpine Linux,
-Windows, and older Linux distributions are not supported by this package.
-Git must be installed separately. Node.js/npm are only needed to install or
+Version 0.2.0 includes static musl binaries for **Linux x64 and ARM64**. A small
+shell launcher selects the host architecture; glibc and Alpine/musl systems are
+supported. CI tests Ubuntu 24.04, Debian Bookworm, and Alpine on both architectures.
+Windows, macOS, and 32-bit systems are not supported by this npm package.
+Git, a POSIX shell, `uname`, and `readlink -f` must be installed separately
+(the latter utilities are provided by coreutils or BusyBox). Node.js/npm are only needed to install or
 update the package; the running server is a native executable. The package has
 no JavaScript dependencies or install scripts, and installation does not start
 services, create credentials, or import sessions.
@@ -16,11 +19,12 @@ services, create credentials, or import sessions.
 
 The published package is
 [`@jooooesg/agit-selfhost`](https://www.npmjs.com/package/@jooooesg/agit-selfhost).
-For a new Ubuntu 24.04 x86-64 installation:
+For a new Linux x64 or ARM64 installation, install Git first (`apt-get install git`
+on Debian/Ubuntu, or `apk add git` on Alpine):
 
 ```sh
 sudo npm install --global --prefix /opt/agit-selfhost --ignore-scripts \
-  --no-audit --no-fund @jooooesg/agit-selfhost@0.1.0
+  --no-audit --no-fund @jooooesg/agit-selfhost@0.2.0
 /opt/agit-selfhost/bin/agit-selfhost --help
 ```
 
@@ -48,6 +52,22 @@ Follow `RUNBOOK.md` to create the service user, initialize the Hub, configure
 HTTPS, and set up clients. Use `/opt/agit-selfhost/bin/agit-selfhost` for both
 initialization and the systemd `ExecStart` executable. Persistent data belongs
 in `/var/lib/agit-selfhost`, outside the npm installation.
+The systemd example applies to systemd distributions; on Alpine, run `serve`
+under the host's service manager. Installation never configures a service itself.
+
+Quota and warning thresholds are configurable, for example:
+
+```sh
+/opt/agit-selfhost/bin/agit-selfhost --data /var/lib/agit-selfhost init \
+  --owner YOUR_OWNER --public-url https://history.example.com \
+  --quota-mib 10240 --warn-percent 90
+```
+
+Defaults are a 5 GiB upload budget, an 80% warning, a 3 GiB free-disk reserve,
+and daily cleanup of abandoned temporary files older than seven days. Saved
+conversations and completed attachments never expire automatically. Use
+`storage-status`, `storage-configure`, or the authenticated API described in
+`RUNBOOK.md` to inspect and change the policy.
 
 Do not run a persistent Hub through `npx`: its cache path is not a stable
 installation location. Git receive hooks record the real executable's absolute
@@ -58,19 +78,32 @@ existing hooks; installing a package alone does not migrate those hooks.
 
 ## Build and publish
 
-From this repository checkout, use Python 3.11 or later and npm:
+Use the GitHub Actions workflow for native builds of both architectures. For
+manual builds, install musl-tools and build the appropriate target on each native
+architecture from the same source commit (x64 example):
 
 ```sh
-cargo build --locked --release
-python3 selfhost/npm/pack.py --binary target/release/agit-selfhost \
+rustup target add x86_64-unknown-linux-musl
+CC_x86_64_unknown_linux_musl=musl-gcc \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+  cargo build --locked --release --target x86_64-unknown-linux-musl
+```
+
+Use `aarch64-unknown-linux-musl` and the corresponding compiler environment
+variables on ARM64. Collect both binaries, then use Python 3.11 or later and npm:
+
+```sh
+python3 selfhost/npm/pack.py --binary-x64 /path/to/x64/agit-selfhost \
+  --binary-arm64 /path/to/arm64/agit-selfhost \
   --name @YOUR_NPM_ACCOUNT/agit-selfhost --source-commit "$(git rev-parse HEAD)" \
   --output selfhost/artifacts/npm
 ```
 
 Replace the package name with a lowercase name owned by your actual npm account.
-The packer does not publish anything. Its allowlist includes only the binary,
+The packer validates both ELF architectures and rejects dynamic-library dependencies.
+It does not publish anything. Its allowlist includes only the binaries, launcher,
 license, deployment examples, and documentation. The build metadata contains the
-binary checksum and the source commit supplied by the caller; build from that
+checksums, target architectures, and the source commit supplied by the caller; build from that
 commit before packing. Run the protocol test against the installed package before
 publishing.
 

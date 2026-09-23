@@ -1,5 +1,5 @@
 use crate::{
-    git, index,
+    git, index, space,
     state::{Repository, State},
 };
 use anyhow::{Context, Result};
@@ -96,14 +96,42 @@ pub fn serve(state: &mut State, listen: &str) -> Result<()> {
     let _lock = state.exclusive_lock()?;
     let server = Server::http(listen).map_err(|e| anyhow::anyhow!("Cannot listen: {e}"))?;
     eprintln!("agit-selfhost listening on {}", server.server_addr());
-    for mut request in server.incoming_requests() {
-        let response = match handle(state, &mut request) {
+    let mut last_cleanup = None::<std::time::Instant>;
+    let mut last_storage_state = String::new();
+    loop {
+        if last_cleanup.is_none_or(|last| {
+            last.elapsed().as_secs() >= state.config.storage.cleanup_interval_hours * 3600
+        }) {
+            match space::cleanup(state, true) {
+                Ok(report) => eprintln!("Storage cleanup: {}", serde_json::to_string(&report)?),
+                Err(failure) => eprintln!("Storage cleanup failed: {failure:#}"),
+            }
+            last_cleanup = Some(std::time::Instant::now());
+        }
+        match space::status(state) {
+            Ok(current) if current.state != last_storage_state => {
+                eprintln!("Storage state: {}", serde_json::to_string(&current)?);
+                last_storage_state = current.state.into();
+            }
+            Err(failure) => eprintln!("Storage check failed: {failure:#}"),
+            _ => {}
+        }
+        let Some(mut request) = server.recv_timeout(std::time::Duration::from_secs(60))? else {
+            continue;
+        };
+        let mut response = match handle(state, &mut request) {
             Ok(reply) => reply,
             Err(failure) => {
                 let status = failure
                     .downcast_ref::<ApiError>()
                     .map(|e| e.0)
-                    .unwrap_or(500);
+                    .unwrap_or_else(|| {
+                        if failure.is::<space::StorageLimit>() {
+                            507
+                        } else {
+                            500
+                        }
+                    });
                 if status == 500 {
                     eprintln!("Request failed: {failure:#}");
                 }
@@ -114,15 +142,29 @@ pub fn serve(state: &mut State, listen: &str) -> Result<()> {
                 };
                 Reply::json(
                     status,
-                    json!({"error":message,"kind":match status {401=>"unauthorized",403=>"forbidden",404=>"not_found",409=>"conflict",412=>"agent_identity_mismatch",428=>"agent_identity_required",413=>"payload_too_large",_=>"request_failed"}}),
+                    json!({"error":message,"kind":match status {401=>"unauthorized",403=>"forbidden",404=>"not_found",409=>"conflict",412=>"agent_identity_mismatch",428=>"agent_identity_required",413=>"payload_too_large",507=>"storage_limit",_=>"request_failed"}}),
                 )
             }
         };
+        if request_header(&request, "Authorization").is_some_and(|authorization| {
+            authorization
+                .strip_prefix("Bearer ")
+                .is_some_and(|token| state.authenticated(token).unwrap_or(false))
+        }) && let Ok(current) = space::status(state)
+        {
+            response
+                .headers
+                .push(header("X-AgentGit-Storage-State", current.state));
+            if let Some(warning) = current.warning {
+                response
+                    .headers
+                    .push(header("X-AgentGit-Storage-Warning", &warning));
+            }
+        }
         if let Err(error) = request.respond(response.response()) {
             eprintln!("Response interrupted: {error}");
         }
     }
-    Ok(())
 }
 
 fn handle(state: &mut State, request: &mut Request) -> Result<Reply> {
@@ -161,6 +203,36 @@ fn handle(state: &mut State, request: &mut Request) -> Result<Reply> {
     if !state.authenticated(access)? {
         return Err(error(401, "Invalid or expired access token"));
     }
+    if path == "/api/storage" && method == "GET" {
+        return Ok(Reply::json(
+            200,
+            serde_json::to_value(space::status(state)?)?,
+        ));
+    }
+    if path == "/api/storage/policy" && method == "PATCH" {
+        let update: space::PolicyUpdate =
+            serde_json::from_value(json_body(request)?).map_err(|e| error(400, e.to_string()))?;
+        update
+            .apply(&state.config.storage)
+            .map_err(|e| error(400, e.to_string()))?;
+        state.configure_storage(&update)?;
+        return Ok(Reply::json(
+            200,
+            serde_json::to_value(space::status(state)?)?,
+        ));
+    }
+    if path == "/api/storage/cleanup" && method == "POST" {
+        let body = json_body(request)?;
+        let apply = match body.get("apply") {
+            None => false,
+            Some(Value::Bool(value)) => *value,
+            _ => return Err(error(400, "apply must be a boolean")),
+        };
+        return Ok(Reply::json(
+            200,
+            serde_json::to_value(space::cleanup(state, apply)?)?,
+        ));
+    }
     if path == "/api/auth/me" && method == "GET" {
         return Ok(Reply::json(200, state.account()));
     }
@@ -175,6 +247,7 @@ fn handle(state: &mut State, request: &mut Request) -> Result<Reply> {
         ));
     }
     if path == "/api/agents" && method == "POST" {
+        space::check_write(state, 64 * 1024)?;
         let body = json_body(request)?;
         if body.get("public").is_some_and(|v| v != &Value::Bool(false)) {
             return Err(error(403, "Only private repositories are supported"));
@@ -246,11 +319,18 @@ fn handle(state: &mut State, request: &mut Request) -> Result<Reply> {
             return Ok(Reply::json(200, json!({"items":refs})));
         }
         if segments.len() == 6 && segments[4] == "sessions" && method == "GET" {
-            return Ok(Reply::json(
-                200,
-                index::read_remote(state, &repo, segments[5], &params)
-                    .map_err(|e| error(422, e.to_string()))?,
-            ));
+            let mut transcript = index::read_remote(state, &repo, segments[5], &params)
+                .map_err(|e| error(422, e.to_string()))?;
+            if let Ok(current) = space::status(state)
+                && let Some(warning) = current.warning
+            {
+                transcript["storage_warning"] = json!({
+                    "message": warning, "state": current.state,
+                    "used_bytes": current.used_bytes, "quota_bytes": current.quota_bytes,
+                    "uploads_paused": current.uploads_paused
+                });
+            }
+            return Ok(Reply::json(200, transcript));
         }
         return Err(error(404, "Unsupported repository operation"));
     }
@@ -349,6 +429,11 @@ fn lfs(
                 }
             } else if exists {
                 json!({"oid":oid,"size":size})
+            } else if let Err(failure) = space::check_write(state, size) {
+                if !failure.is::<space::StorageLimit>() {
+                    return Err(failure);
+                }
+                json!({"oid":oid,"size":size,"error":{"code":507,"message":failure.to_string()}})
             } else {
                 json!({"oid":oid,"size":size,"authenticated":true,"actions":{"upload":{"href":href,"header":headers},"verify":{"href":format!("{href}/verify"),"header":headers}}})
             };
@@ -384,7 +469,8 @@ fn lfs(
         return Reply::file(File::open(object).map_err(|_| error(404, "LFS object not found"))?);
     }
     if suffix == oid && method == "PUT" {
-        let mut temporary = tempfile::NamedTempFile::new_in(&root)?;
+        let mut budget = space::UploadBudget::new(state, request.body_length())?;
+        let mut temporary = tempfile::NamedTempFile::new_in(state.root.join("tmp"))?;
         let mut hash = Sha256::new();
         let mut total = 0u64;
         let mut buffer = [0u8; 64 * 1024];
@@ -398,6 +484,7 @@ fn lfs(
                 return Err(error(413, "LFS object exceeds upload limit"));
             }
             hash.update(&buffer[..n]);
+            budget.consume(n)?;
             temporary.write_all(&buffer[..n])?;
         }
         if hex::encode(hash.finalize()) != oid {
@@ -430,13 +517,23 @@ fn smart_http(
     }
     let mut input = tempfile::NamedTempFile::new_in(state.root.join("tmp"))?;
     let limit = state.config.max_upload_mib * 1024 * 1024;
-    let copied = std::io::copy(&mut request.as_reader().take(limit + 1), &mut input)?;
+    let receives = suffix == "git-receive-pack";
+    let announced = request.body_length();
+    let copied = if receives {
+        space::copy_upload(
+            state,
+            &mut request.as_reader().take(limit + 1),
+            &mut input,
+            announced,
+        )?
+    } else {
+        std::io::copy(&mut request.as_reader().take(limit + 1), &mut input)?
+    };
     if copied > limit {
         return Err(error(413, "Git request exceeds upload limit"));
     }
     input.seek(SeekFrom::Start(0))?;
     let output = tempfile::NamedTempFile::new_in(state.root.join("tmp"))?;
-    let receives = suffix == "git-receive-pack";
     if receives {
         git::validate_push_commands(&mut input).map_err(|e| error(422, e.to_string()))?;
         input.seek(SeekFrom::Start(0))?;

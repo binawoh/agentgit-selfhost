@@ -16,6 +16,8 @@ pub struct Config {
     pub public_url: String,
     pub max_snapshot_mib: usize,
     pub max_upload_mib: u64,
+    #[serde(default)]
+    pub storage: crate::space::Policy,
 }
 
 #[derive(Clone)]
@@ -76,8 +78,10 @@ impl State {
         public_url: String,
         max_snapshot_mib: usize,
         max_upload_mib: u64,
+        storage: crate::space::Policy,
     ) -> Result<Self> {
         valid_name(&owner)?;
+        storage.validate()?;
         ensure!(
             (1..=512).contains(&max_snapshot_mib),
             "Snapshot limit must be between 1 and 512 MiB"
@@ -126,6 +130,7 @@ impl State {
             public_url: url.as_str().trim_end_matches('/').to_owned(),
             max_snapshot_mib,
             max_upload_mib,
+            storage,
         };
         for directory in ["repos", "lfs", "tmp"] {
             std::fs::create_dir(root.join(directory))?;
@@ -141,6 +146,7 @@ impl State {
         let root = dunce::canonicalize(root).context("Initialize the Hub data directory first")?;
         let config: Config = serde_json::from_slice(&std::fs::read(root.join("config.json"))?)?;
         ensure!(config.schema == 1, "Unsupported Hub schema");
+        config.storage.validate()?;
         let db = Connection::open(root.join("hub.sqlite3"))?;
         db.busy_timeout(std::time::Duration::from_secs(10))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
@@ -161,6 +167,19 @@ impl State {
             )?;
         }
         Ok(Self { root, config, db })
+    }
+
+    pub fn configure_storage(&mut self, update: &crate::space::PolicyUpdate) -> Result<()> {
+        let policy = update.apply(&self.config.storage)?;
+        let mut value = serde_json::to_value(&self.config)?;
+        value["storage"] = serde_json::to_value(&policy)?;
+        let mut file = tempfile::NamedTempFile::new_in(&self.root)?;
+        use std::io::Write;
+        file.write_all(&serde_json::to_vec_pretty(&value)?)?;
+        file.as_file().sync_all()?;
+        file.persist(self.root.join("config.json"))?;
+        self.config.storage = policy;
+        Ok(())
     }
 
     pub fn issue_token(&self, label: &str) -> Result<String> {
