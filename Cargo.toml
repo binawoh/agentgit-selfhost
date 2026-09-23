@@ -1,6 +1,6 @@
 [package]
 name = "agit-selfhost"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -10,7 +10,7 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-agit = { git = "https://github.com/binawoh/agent-git", rev = "66c3a042c6b6643de7627b19b8a65984054beb1c", default-features = false }
+agit = { git = "https://github.com/binawoh/agent-git", rev = "69e7489ddd069420cc9d2a569a45bfe0fe6123c6", default-features = false }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 clap = { version = "4", features = ["derive"] }

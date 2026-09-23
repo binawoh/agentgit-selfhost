@@ -4,8 +4,8 @@ version = 4
 
 [[package]]
 name = "agit"
-version = "0.2.3"
-source = "git+https://github.com/binawoh/agent-git?rev=66c3a042c6b6643de7627b19b8a65984054beb1c#66c3a042c6b6643de7627b19b8a65984054beb1c"
+version = "0.2.6"
+source = "git+https://github.com/binawoh/agent-git?rev=69e7489ddd069420cc9d2a569a45bfe0fe6123c6#69e7489ddd069420cc9d2a569a45bfe0fe6123c6"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "agit-selfhost"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "agit",
  "anyhow",

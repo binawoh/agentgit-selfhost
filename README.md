@@ -68,7 +68,8 @@ private data outside the source checkout and bind the service to loopback.
 ## Client compatibility
 
 Use the companion client built from the pinned revision of
-[`binawoh/agent-git`](https://github.com/binawoh/agent-git/tree/66c3a042c6b6643de7627b19b8a65984054beb1c).
+[`binawoh/agent-git`](https://github.com/binawoh/agent-git/tree/69e7489ddd069420cc9d2a569a45bfe0fe6123c6),
+based on upstream AgentGit 0.2.6.
 It includes the private Hub `read_remote` MCP tool, archived Codex lookup,
 atomic publishing, and Windows credential permission fixes.
 

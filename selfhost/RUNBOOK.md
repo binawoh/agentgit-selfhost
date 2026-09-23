@@ -7,7 +7,7 @@ no browser management UI, subscription service, public sharing, organization
 management, or remote agent execution. Unsupported API operations fail explicitly.
 
 Use the companion client from `binawoh/agent-git` at
-`66c3a042c6b6643de7627b19b8a65984054beb1c`, also pinned as the core dependency
+`69e7489ddd069420cc9d2a569a45bfe0fe6123c6`, also pinned as the core dependency
 in `Cargo.toml`. It adds `read_remote` to MCP, archive-aware Codex ID lookup,
 atomic Hub pushes, and a Windows OWNER RIGHTS permission fix.
 It retains all other credential checks.

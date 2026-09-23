@@ -5,7 +5,7 @@ This package distributes a prebuilt private Hub from
 The service and its data run on your own VPS. The npm registry hosts the
 installation package; it does not host the service or save your conversations.
 
-Version 0.2.0 includes static musl binaries for **Linux x64 and ARM64**. A small
+The package includes static musl binaries for **Linux x64 and ARM64**. A small
 shell launcher selects the host architecture; glibc and Alpine/musl systems are
 supported. CI tests Ubuntu 24.04, Debian Bookworm, and Alpine on both architectures.
 Windows, macOS, and 32-bit systems are not supported by this npm package.
@@ -24,7 +24,7 @@ on Debian/Ubuntu, or `apk add git` on Alpine):
 
 ```sh
 sudo npm install --global --prefix /opt/agit-selfhost --ignore-scripts \
-  --no-audit --no-fund @jooooesg/agit-selfhost@0.2.0
+  --no-audit --no-fund @jooooesg/agit-selfhost@0.2.1
 /opt/agit-selfhost/bin/agit-selfhost --help
 ```
 
