@@ -120,13 +120,17 @@ def main():
             rejected = api(rejected_url, "PUT", oversized, expected=507, headers=auth)[0]
             assert rejected["kind"] == "storage_limit"
             assert not (artifact.parent / rejected_oid).exists()
+            current_usage = api("/api/storage")[0]
+            remaining = current_usage["quota_bytes"] - current_usage["used_bytes"]
+            assert remaining > 0
+            streaming = b"x" * (remaining + 1)
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
             try:
                 try:
                     connection.request("PUT", rejected_url,
-                                       body=(oversized[i:i + 65536] for i in range(0, len(oversized), 65536)),
+                                       body=(streaming[i:i + 65536] for i in range(0, len(streaming), 65536)),
                                        headers={"Authorization": f"Bearer {access}", **auth}, encode_chunked=True)
-                except (BrokenPipeError, ConnectionResetError):
+                except ConnectionError:
                     # A server may reject a streaming body before the client finishes sending it.
                     pass
                 response = connection.getresponse()
