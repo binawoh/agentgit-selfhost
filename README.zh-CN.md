@@ -76,7 +76,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://history.example.com/api/agents
 
 ### 4. 连接一台电脑
 
-先编译[配套客户端](#配套客户端)，然后登录。可以用第一个 PAT，也可以用 `issue-token --label NAME`
+先装好[配套客户端](#配套客户端)，然后登录。可以用第一个 PAT，也可以用 `issue-token --label NAME`
 给每台电脑单独发一个，这样能单独吊销（见[运维手册](selfhost/RUNBOOK.md#restore-maintain-and-back-up)）。
 
 PowerShell：
@@ -172,8 +172,10 @@ target/release/agit-selfhost --help
 固定版本编译出来的客户端，它基于上游 AgentGit 0.2.6，比官方版多了：私有 Hub 的 `read_remote` MCP 工具、
 已归档 Codex 会话的查找、原子发布，以及 Windows 凭据权限修复。官方客户端没有和这个 Hub 一起测过。
 
-目前没有发布预编译的客户端，需要用 Git 和 [rustup](https://rustup.rs) 自己编译。仓库固定了 Rust 工具链，
-第一次编译时 rustup 会自动安装。Windows 上要先装 Microsoft C++ Build Tools。
+fork 的[配套版 Release](https://github.com/binawoh/agent-git/releases) 里有 Windows、macOS 和 Linux 的预编译客户端，
+各平台对应哪个文件见[控制台 README](https://github.com/binawoh/agent-git/blob/remote-control/crates/agit-remote/README.md#connect-a-computer)。
+也可以用 Git 和 [rustup](https://rustup.rs) 自己编译：仓库固定了 Rust 工具链，第一次编译时 rustup 会自动安装；
+Windows 上要先装 Microsoft C++ Build Tools。
 
 ```sh
 git clone https://github.com/binawoh/agent-git agit-companion
@@ -183,11 +185,13 @@ cargo build --release --locked --bin agit
 ```
 
 编译出来的客户端在 `target/release/agit`（Windows 上是 `agit.exe`）。把它放进 `PATH`，并且排在
-官方 `agit` 前面。**不要对它运行 `agit upgrade`**：这个命令会用官方版本把它替换掉。本仓库更新固定版本后，
-从新的提交重新编译。
+官方 `agit` 前面。`agit upgrade` 会向 Hub 询问最新版本，Hub 给出版本号时就装官方版；本 Hub 不回答这个问题，
+所以配套客户端要从它的 Release 更新，或者重新编译。
 
 配置 MCP 只是让 agent 能读到已上传的记录，不会上传当前对话。收集、导入、推送、恢复的具体命令见运维手册。
-`agit rc` 远程控制不在本后端的范围内。
+
+想在浏览器里操控各台电脑上的 agent，就在本 Hub 旁边运行 fork 里的
+[agit-remote](https://github.com/binawoh/agent-git/blob/remote-control/crates/agit-remote/README.md) 网页控制台和中继。
 
 ## 验证
 

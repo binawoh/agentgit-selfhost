@@ -92,7 +92,7 @@ The last command prints `401`: the API refuses requests without a token.
 
 ### 4. Connect a computer
 
-Build the [companion client](#companion-client) and sign in. Use the first PAT, or
+Install the [companion client](#companion-client) and sign in. Use the first PAT, or
 issue one per computer with `issue-token --label NAME` so each can be revoked on its
 own ([runbook](selfhost/RUNBOOK.md#restore-maintain-and-back-up)).
 
@@ -203,7 +203,10 @@ It includes the private Hub `read_remote` MCP tool, archived Codex lookup,
 atomic publishing, and Windows credential permission fixes. The official client
 is not tested against this Hub.
 
-No prebuilt client is published; build it with Git and
+Prebuilt clients for Windows, macOS and Linux are attached to the fork's
+[companion releases](https://github.com/binawoh/agent-git/releases); the
+[console README](https://github.com/binawoh/agent-git/blob/remote-control/crates/agit-remote/README.md#connect-a-computer)
+lists the file for each platform. To build one instead, use Git and
 [rustup](https://rustup.rs). The checkout pins its Rust toolchain, which rustup
 installs on the first build. On Windows, install the Microsoft C++ Build Tools first.
 
@@ -215,14 +218,17 @@ cargo build --release --locked --bin agit
 ```
 
 The client is `target/release/agit` (`agit.exe` on Windows). Put it on `PATH`
-ahead of any official `agit`. Do not run `agit upgrade` with it: that command
-replaces it with the official release. When this repository pins a new revision,
-rebuild from that revision.
+ahead of any official `agit`. `agit upgrade` asks the Hub for the newest client
+and installs the official release when the Hub names one; this Hub does not
+answer, so update the companion client from its releases or rebuild it instead.
 
 Configuring MCP enables access to records that have already been uploaded.
 It does not upload your current conversation. See the runbook for explicit
-collection, import, push, and restore commands. The `agit rc` remote-control
-service is outside this backend's scope.
+collection, import, push, and restore commands.
+
+To drive the agents on your computers from a browser, run the fork's
+[agit-remote](https://github.com/binawoh/agent-git/blob/remote-control/crates/agit-remote/README.md)
+Web console and relay beside this Hub.
 
 ## Verification
 
